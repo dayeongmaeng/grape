@@ -50,9 +50,9 @@ export default function HarvestDetailScreen() {
     setCardSize((prev) => (prev.width === width && prev.height === height ? prev : { width, height }));
   };
 
-  const onChangeFilled = (count: number) => {
+  const onChangeFilled = async (count: number) => {
     if (count >= harvest.count) return; // still fully filled — nothing to undo
-    const restored = recallHarvest(harvest.id, count);
+    const restored = await recallHarvest(harvest.id, count);
     if (restored) router.replace(`/bunch/${restored.id}`);
   };
 

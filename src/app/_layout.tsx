@@ -16,6 +16,18 @@ import { GrapeStoreProvider, useGrapeStore } from '@/store/grape-store';
 
 SplashScreen.preventAutoHideAsync();
 
+function Gate() {
+  const { isBootstrapping } = useGrapeStore();
+
+  useEffect(() => {
+    if (!isBootstrapping) SplashScreen.hideAsync();
+  }, [isBootstrapping]);
+
+  // keep the splash up until the stored session (if any) has been restored
+  if (isBootstrapping) return null;
+  return <RootNavigator />;
+}
+
 function RootNavigator() {
   const { isAuthenticated } = useGrapeStore();
 
@@ -50,16 +62,12 @@ export default function RootLayout() {
     NotoSansKR_700Bold,
   });
 
-  useEffect(() => {
-    if (fontsLoaded) SplashScreen.hideAsync();
-  }, [fontsLoaded]);
-
   if (!fontsLoaded) return null;
 
   return (
     <GrapeStoreProvider>
       <StatusBar style="light" />
-      <RootNavigator />
+      <Gate />
     </GrapeStoreProvider>
   );
 }

@@ -2,8 +2,9 @@
 **포도알 채우기** — 피아노 학원 "포도알 스티커판"을 디지털화한 반복/습관 기록 앱.
 악기 연습, 다회독, 운동 등 반복 행위를 "포도송이" 단위로 만들어 기록한다.
 
-- **지금은 1단계: 백엔드 없이 클라이언트 로컬 저장소만으로 완결되는 앱.** 서버/계정/동기화 코드는 넣지 않는다.
-- 2단계(친구와 함께 보기 + Spring Boot 백엔드)는 향후 계획일 뿐, 지금 단계에서 미리 구현하거나 대비 코드를 넣지 말 것.
+- **grape-api 서버(Spring Boot)에 연결돼 있다.** 게스트/소셜 로그인 + 개인 데이터 서버 동기화까지가 현재 범위. 전역 상태(`grape-store.tsx`)의 모든 액션이 `src/lib/api.ts`를 통해 실제 API를 호출한다. `setFilled`/삭제/설정은 낙관적(즉시 반영 후 실패 시 `refresh()` 롤백), **생성(`addBunch`)은 서버 응답을 기다린 뒤 상태에 추가**한다 — 클라가 임시 id를 만들지 않으므로 이후 모든 액션이 실제 UUID를 대상으로 한다.
+- 소셜 로그인(Google/Kakao)은 **서버 배선까지만** 완료 — 실제 OAuth SDK로 provider 토큰을 발급받는 부분은 스텁(`loginContinue`). 게스트 로그인은 완전 동작.
+- "친구와 함께 보기"(공유) 기능은 여전히 향후 계획 — 미리 구현하거나 대비 코드를 넣지 말 것.
 
 ## 기술 스택
 **Expo(RN 0.86.2, SDK 57) + expo-router + React Context 상태관리**가 이 프로젝트의 골격  
@@ -12,14 +13,16 @@
 | 영역 | 선택 | 비고 |
 |---|---|---|
 | 라우팅 | expo-router (파일 기반) | `<Stack>`/`<Tabs>` 직접 조립 안 함 |
-| 상태관리 | React Context (`grape-store.tsx`) | 유일한 전역 상태. Zustand 아님 |
-| 저장소 | **없음(미구현)** | 시드 데이터로 시작, 새로고침 시 초기화됨. 영속화는 남은 과제 |
+| 상태관리 | React Context (`grape-store.tsx`) | 유일한 전역 상태. Zustand 아님. 액션 = 낙관적 로컬 갱신 + `api.ts` 호출 |
+| 서버 통신 | `fetch` 래퍼 (`src/lib/api.ts`) | Bearer 자동 첨부, 401 시 refresh 토큰 로테이션 후 1회 재시도 |
+| 토큰 저장 | `expo-secure-store` (네이티브) / `localStorage` (웹) | `src/lib/token-store.ts`. access + refresh |
+| 데이터 영속 | grape-api 서버 (PostgreSQL) | 시드 데이터 없음. 로그인 직후 목록 fetch로 초기 상태 구성 |
 | 스타일링 | `StyleSheet.create` | NativeWind 안 씀 |
 | 애니메이션 | reanimated + worklets | 웹에서 `entering` 버그 있음 → "구현 참고사항" 참고 |
 | 아이콘 | lucide-react-native | 뒤로가기=ChevronLeft, 삭제=Trash2 |
 | 폰트 | Gowun Batang(타이틀) / Noto Sans KR(본문) | |
 | 테스트 | 없음 | 검증은 `npm run lint` + 수동 확인 |
-| 빌드 설정 | `eas.json`/`.env` 없음 | 빌드 프로필·환경변수 분기 코드 넣지 말 것 |
+| 환경변수 | `.env.development` / `.env.production` | `EXPO_PUBLIC_API_BASE_URL` — dev `http://localhost:8080`, prod `https://grape.kkori.co.kr`. `eas.json`은 아직 없음 |
 
 > 참고용 웹 프로토타입(.html)이 있지만 실제 구현은 위 RN 스택으로 하며, 마크업이 아닌 색상/간격/레이아웃 값만 가져온다.
 
@@ -35,7 +38,7 @@ npx expo start / npm start / npm run android / npm run ios / npm run web / npm r
 - `components/` — 공유 UI. 파일명 kebab-case, export명 PascalCase
 - `constants/` — `theme.ts`(디자인 토큰), `grape-shapes.ts`(포도송이 도형 계산)
 - `store/` — 전역 상태. `grape-store.tsx` 하나뿐. 새 전역 상태도 여기 합칠 것(Context 파편화 금지)
-- `lib/` — React/상태 비의존 순수 함수 (`stats.ts` 등)
+- `lib/` — React/상태 비의존 로직: `stats.ts`(순수 함수), `api.ts`(서버 클라이언트), `token-store.ts`(토큰 저장). 서버 호출은 항상 `api.ts`를 거치고 화면에서 직접 `fetch` 하지 말 것
 - `types/` — 여러 곳에서 공유하는 타입만 (`grape.ts`). 컴포넌트 전용 props 타입은 그 파일 안에
 
 ## 코딩 컨벤션
@@ -59,7 +62,7 @@ npx expo start / npm start / npm run android / npm run ios / npm run web / npm r
 ## 데이터 모델
 **현재는 `bunches`(진행 중)와 `harvests`(완성 기록)는 서로 독립된 두 리스트**  
 하나의 객체가 두 리스트를 오가지 않음 — 완성 시 `Harvest` 스냅샷이 하나 더 쌓일 뿐, 원본 `Bunch`는 상황에 따라 리셋되거나 삭제  
-**API 연동 시, 하나의 리스트가 됨 서로 연동이 되고, 완료 상태값에 따라 bunches와 harvests에 자동으로 분류되는 구조로 바뀔 수 있음.**
+서버(grape-api)도 이 구조를 그대로 유지한다 — `bunches`/`harvests`는 서버에서도 별개 테이블이며, replant/archive/recall이 두 리스트를 오가게 만든다. 클라 타입과 서버 응답 필드명이 camelCase로 1:1 일치하므로 변환 계층은 없다.
 
 
 ```ts
@@ -100,5 +103,7 @@ interface Harvest {
 - **삭제 아이콘 색**: 화면에 상시 노출될 땐 `Colors.textTertiary`, 삭제 확정 모달의 버튼 안에서만 `Colors.textDanger` — 확정 전 아이콘을 빨갛게 칠하지 말 것
 
 ## 하지 말 것 (이번 단계 스코프 아님)
-- 서버 API 호출
+- 화면 컴포넌트에서 직접 `fetch` (항상 `store` 액션 → `lib/api.ts` 경유)
+- "함께 보기"(공유) 관련 화면·상태·API
 - 홈 화면 위젯, 푸시 알림
+- `Bunch`/`Harvest`/`NotificationSettings`에 서버 응답 변환 코드 추가 (필드명이 이미 1:1 일치)
