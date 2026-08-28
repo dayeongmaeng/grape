@@ -34,26 +34,38 @@ function buildMonthGrid(activityDays: Set<string>) {
 }
 
 export default function RecordsScreen() {
-  const { bunches } = useGrapeStore();
+  const { bunches, harvests } = useGrapeStore();
 
-  const allFillDates = useMemo(() => bunches.flatMap((b) => b.fillDates), [bunches]);
+  // Stats span active bunches and archived harvests (archive carries a bunch's
+  // fillDates into its harvest, recall restores them). Two shapes of the same
+  // merge, used for different metrics — never mix them:
+  //  - mergedFillDates: one entry per grape filled (duplicates kept) → grape counts
+  //  - uniqueFillDays:  distinct day keys → calendar dots + streak
+  const mergedFillDates = useMemo(
+    () => [
+      ...bunches.flatMap((b) => b.fillDates ?? []),
+      ...harvests.flatMap((h) => h.fillDates ?? []),
+    ],
+    [bunches, harvests],
+  );
+  const uniqueFillDays = useMemo(() => Array.from(new Set(mergedFillDates)), [mergedFillDates]);
 
   const now = useMemo(() => new Date(), []);
   const monthLabel = now.getMonth() + 1;
   const monthCount = useMemo(
     () =>
-      allFillDates.filter((d) => {
+      mergedFillDates.filter((d) => {
         const date = new Date(d);
         return date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth();
       }).length,
-    [allFillDates, now],
+    [mergedFillDates, now],
   );
 
-  const activityDays = useMemo(() => new Set(allFillDates), [allFillDates]);
+  const activityDays = useMemo(() => new Set(uniqueFillDays), [uniqueFillDays]);
   const grid = useMemo(() => buildMonthGrid(activityDays), [activityDays]);
 
-  const streak = currentStreak(allFillDates);
-  const avgPerWeek = weeklyAverage(allFillDates);
+  const streak = currentStreak(uniqueFillDays);
+  const avgPerWeek = weeklyAverage(mergedFillDates);
 
   const statRows = useMemo(
     () =>

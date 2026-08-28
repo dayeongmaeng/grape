@@ -27,6 +27,14 @@ export interface Harvest {
   /** Grapes filled in that cycle (the bunch's `total` at harvest time). */
   count: number;
   harvestedAt: string;
+  /**
+   * The archived bunch's full fill history, carried over on "보관함에서 확인하기"
+   * so the calendar / streak / weekly-average stats keep counting those days
+   * after the source bunch is gone. `recallHarvest` restores it onto the fresh
+   * `Bunch`. Empty (`[]`) for a "같은 송이 다시 심기" harvest — that bunch keeps
+   * cycling and keeps its own `fillDates`, so the day count stays with it.
+   */
+  fillDates: string[];
 }
 
 export interface NotificationSettings {

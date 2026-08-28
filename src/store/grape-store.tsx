@@ -27,8 +27,16 @@ const DEFAULT_SETTINGS: NotificationSettings = {
  */
 function applyFilled(bunch: Bunch, filled: number): Bunch {
   const clamped = Math.max(0, Math.min(bunch.total, filled));
-  const grew = clamped > bunch.filled;
-  const fillDates = grew ? [...bunch.fillDates, toDateKey(new Date())] : bunch.fillDates;
+  const gained = clamped - bunch.filled;
+  // Tolerate a bunch whose fillDates the server (mid-transition) omitted or nulled —
+  // e.g. a freshly recalled harvest — so the first fill doesn't throw on the spread.
+  const current = Array.isArray(bunch.fillDates) ? bunch.fillDates : [];
+  // One fill-date entry per grape gained, so "N월에 M알" / 주 평균 count grapes, not taps
+  // (a single tap can add several at once). Never removes entries on a decrease.
+  const fillDates =
+    gained > 0
+      ? [...current, ...Array.from({ length: gained }, () => toDateKey(new Date()))]
+      : current;
   const completedAt = clamped === bunch.total ? (bunch.completedAt ?? new Date().toISOString()) : undefined;
   return { ...bunch, filled: clamped, fillDates, completedAt };
 }
@@ -74,9 +82,9 @@ interface GrapeStore {
   addBunch: (input: { name: string; unitLabel: string; total: number; periodDays: number }) => Promise<Bunch | undefined>;
   setFilled: (id: string, filled: number) => void;
   addOneGrape: (id: string) => void;
-  /** "보관함에서 확인하기": archives the bunch server-side and appends the harvest. */
+  /** Archives the bunch server-side and appends the harvest. Fired automatically on the complete screen. */
   addHarvest: (bunch: Bunch) => Promise<Harvest | undefined>;
-  /** "같은 송이 다시 심기": records a harvest and resets the bunch for another cycle. */
+  /** Records a harvest and resets the bunch for another cycle. Unused since completion auto-archives; kept for the server route. */
   harvestBunch: (id: string) => Promise<Harvest | undefined>;
   deleteBunch: (id: string) => void;
   deleteHarvest: (id: string) => void;
@@ -107,8 +115,10 @@ export function GrapeStoreProvider({ children }: { children: ReactNode }) {
 
   const loadLists = useCallback(async () => {
     const [b, h, s] = await Promise.all([api.listBunches(), api.listHarvests(), api.getSettings()]);
-    setBunches(b);
-    setHarvests(h);
+    // fillDates is the one field the server can still send missing/null during the
+    // fill_events transition; every consumer assumes an array, so pin it here.
+    setBunches(b.map((x) => (Array.isArray(x.fillDates) ? x : { ...x, fillDates: [] })));
+    setHarvests(h.map((x) => (Array.isArray(x.fillDates) ? x : { ...x, fillDates: [] })));
     setSettings(s);
   }, []);
 
@@ -286,15 +296,18 @@ export function GrapeStoreProvider({ children }: { children: ReactNode }) {
     [fail, refresh],
   );
 
-  // "보관함에서 확인하기" — the client calls addHarvest + deleteBunch; the server does both in
-  // POST /bunches/{id}/archive, so this fires that and the following deleteBunch 404s harmlessly.
+  // Archive path (auto-fired on the complete screen). Server does archive + delete in
+  // POST /bunches/{id}/archive; the optimistic filter below removes it locally.
   const addHarvest = useCallback<GrapeStore['addHarvest']>(
     async (bunch) => {
       setBunches((prev) => prev.filter((b) => b.id !== bunch.id)); // optimistic removal (real id)
       try {
         const { harvest } = await serialize(() => api.archiveBunch(bunch.id));
-        setHarvests((prev) => [harvest, ...prev]);
-        return harvest;
+        // Carry the archived bunch's fill history into the harvest so the records
+        // stats keep counting those days (the server persists the same transfer).
+        const stored = { ...harvest, fillDates: harvest.fillDates ?? bunch.fillDates ?? [] };
+        setHarvests((prev) => [stored, ...prev]);
+        return stored;
       } catch (e) {
         fail(e, '보관하지 못했어요');
         void refresh();
@@ -324,7 +337,9 @@ export function GrapeStoreProvider({ children }: { children: ReactNode }) {
       );
       try {
         const { harvest, bunch: server } = await serialize(() => api.replantBunch(id));
-        setHarvests((prev) => [harvest, ...prev]);
+        // Replant keeps the bunch cycling with its own fillDates, so this snapshot
+        // carries none — the day count stays on the still-active bunch, never doubled.
+        setHarvests((prev) => [{ ...harvest, fillDates: [] }, ...prev]);
         setBunches((prev) => prev.map((b) => (b.id === server.id ? server : b)));
         return harvest;
       } catch (e) {
@@ -352,7 +367,14 @@ export function GrapeStoreProvider({ children }: { children: ReactNode }) {
       const harvest = harvests.find((h) => h.id === harvestId);
       if (!harvest) return undefined;
       try {
-        const bunch = await serialize(() => api.recallHarvest(harvestId, filled));
+        const created = await serialize(() => api.recallHarvest(harvestId, filled));
+        // Restore the fill history the harvest carried onto the fresh bunch so the
+        // stats stay continuous (the server does the same; falls back to the local
+        // snapshot if the server response omits it).
+        const bunch = {
+          ...created,
+          fillDates: created.fillDates?.length ? created.fillDates : (harvest.fillDates ?? []),
+        };
         setHarvests((prev) => prev.filter((h) => h.id !== harvestId));
         setBunches((prev) => [bunch, ...prev]);
         return bunch;

@@ -20,14 +20,18 @@ import { Colors, FontSize, Fonts, Radius, Spacing } from '@/constants/theme';
 import { generateBunchShape } from '@/constants/grape-shapes';
 import { useGrapeStore } from '@/store/grape-store';
 
-const MEANING_PRESETS = ['30분 연습', '1챕터', '1회'];
-const SIZE_PRESETS = [12, 24, 30];
-const PERIOD_PRESETS = [14, 30];
-const CUSTOM = 3;
-const CUSTOM_PERIOD = 2;
-const NO_DEADLINE = 3;
+const MEANING_PRESETS = ['1회', '1챕터', '30분 연습'];
+const SIZE_PRESETS = [10, 20, 30];
+const MEANING_CUSTOM = MEANING_PRESETS.length;
+const SIZE_CUSTOM = SIZE_PRESETS.length;
+const PERIOD_OPTIONS = [
+  { label: '기간 없음', days: 0 },
+  { label: '1주', days: 7 },
+  { label: '한 달', days: 30 },
+  { label: '직접 입력', days: -1 },
+];
+const PERIOD_CUSTOM = PERIOD_OPTIONS.length - 1;
 const PREVIEW_MAX_ROWS = 5;
-const PERIOD_LABELS = ['2주', '한 달', '직접', '기간 없음'];
 
 export default function NewBunchScreen() {
   const { addBunch } = useGrapeStore();
@@ -36,16 +40,16 @@ export default function NewBunchScreen() {
   const [meaningIndex, setMeaningIndex] = useState(0);
   const [customMeaning, setCustomMeaning] = useState('');
 
-  const [sizeIndex, setSizeIndex] = useState(1);
+  const [sizeIndex, setSizeIndex] = useState(0);
   const [customSize, setCustomSize] = useState(40);
 
-  const [periodIndex, setPeriodIndex] = useState(1);
+  const [periodIndex, setPeriodIndex] = useState(0);
   const [customDays, setCustomDays] = useState(60);
 
-  const total = sizeIndex === CUSTOM ? customSize : SIZE_PRESETS[sizeIndex];
+  const total = sizeIndex === SIZE_CUSTOM ? customSize : SIZE_PRESETS[sizeIndex];
   const periodDays =
-    periodIndex === CUSTOM_PERIOD ? customDays : periodIndex === NO_DEADLINE ? 0 : PERIOD_PRESETS[periodIndex];
-  const unitLabel = meaningIndex === CUSTOM ? customMeaning : MEANING_PRESETS[meaningIndex];
+    periodIndex === PERIOD_CUSTOM ? customDays : PERIOD_OPTIONS[periodIndex].days;
+  const unitLabel = meaningIndex === MEANING_CUSTOM ? customMeaning : MEANING_PRESETS[meaningIndex];
 
   const paceText = useMemo(() => {
     if (!periodDays) return '천천히, 마감 없이';
@@ -108,7 +112,7 @@ export default function NewBunchScreen() {
                   />
                 ))}
               </View>
-              {meaningIndex === CUSTOM && (
+              {meaningIndex === MEANING_CUSTOM && (
                 <TextInput
                   value={customMeaning}
                   onChangeText={setCustomMeaning}
@@ -137,7 +141,7 @@ export default function NewBunchScreen() {
                   />
                 ))}
               </View>
-              {sizeIndex === CUSTOM && (
+              {sizeIndex === SIZE_CUSTOM && (
                 <Stepper
                   label="직접 입력"
                   helper="1 ~ 1000알"
@@ -153,10 +157,10 @@ export default function NewBunchScreen() {
                 <Text style={styles.labelValueMuted}>{paceText}</Text>
               </View>
               <View style={styles.chipRow}>
-                {['2주', '한 달', '직접', '기간 없음'].map((label, i) => (
+                {PERIOD_OPTIONS.map((opt, i) => (
                   <Chip
-                    key={label}
-                    label={label}
+                    key={opt.label}
+                    label={opt.label}
                     selected={periodIndex === i}
                     onPress={() => setPeriodIndex(i)}
                     shape="block"
@@ -165,7 +169,7 @@ export default function NewBunchScreen() {
                   />
                 ))}
               </View>
-              {periodIndex === CUSTOM_PERIOD && (
+              {periodIndex === PERIOD_CUSTOM && (
                 <Stepper
                   label="직접 입력"
                   helper="1 ~ 1000일"
@@ -179,7 +183,7 @@ export default function NewBunchScreen() {
 
             <View style={styles.previewCard}>
               <Text style={styles.previewLabel}>
-                미리보기 · {total}알 · {PERIOD_LABELS[periodIndex]}
+                미리보기 · {total}알 · {PERIOD_OPTIONS[periodIndex].label}
                 {previewRest > 0 ? ` (외 ${previewRest}알)` : ''}
               </Text>
               <GrapeBunch shape={previewRows} filledCount={0} cellSize={13} gap={4} variant="dot" />

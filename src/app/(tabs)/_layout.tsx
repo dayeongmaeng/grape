@@ -28,7 +28,10 @@ export default function TabsLayout() {
         tabBarStyle: [styles.bar, { height: 56 + insets.bottom, paddingBottom: insets.bottom }],
       }}>
       <Tabs.Screen name="index" options={{ title: '송이' }} />
-      <Tabs.Screen name="records" options={{ title: '기록' }} />
+      {/* 기록 탭은 탭바에서 숨김(href: null) — 라우트/통계 로직은 그대로 유지되고
+          직접 URL/딥링크(`/records`)로는 정상 진입한다. 재노출하려면 이 항목을
+          `options={{ title: '기록' }}`로 되돌리면 된다. */}
+      <Tabs.Screen name="records" options={{ href: null }} />
       <Tabs.Screen name="archive" options={{ title: '보관함' }} />
     </Tabs>
   );

@@ -73,31 +73,42 @@ npx expo start / npm start / npm run android / npm run ios / npm run web / npm r
 interface Bunch {
   id: string; name: string; detail: string; unitLabel: string;
   total: number; filled: number; periodDays: number; // 0 = 기간 없음
-  createdAt: string; fillDates: string[]; // 수확해도 초기화 안 됨
+  createdAt: string; fillDates: string[]; // 늘어난 알 1개당 날짜 1항목(한 번에 3알이면 3항목), 수확해도 초기화 안 됨, 감소 시 삭제 안 됨
   completedAt?: string; completions: number;
 }
 
 interface Harvest {
   id: string; sourceBunchId: string; // 원본 삭제돼도 값 유지(고아 참조 허용)
   name: string; count: number; harvestedAt: string;
+  fillDates: string[]; // archive 시 원본 Bunch.fillDates를 이관받아 보존, recall 시 새 Bunch로 복원
 }
 ```
 
-완성 시 두 버튼의 차이 (/bunch/complete), 둘 다 Harvest는 추가함:
-- 같은 송이 다시 심기 → Bunch를 filled:0, completedAt:undefined로 리셋해 계속 유지 → 홈으로 이동
-- 보관함에서 확인하기 → Bunch 완전 삭제 → 보관함으로 이동
+**완성 시 보관은 자동이다.** `bunch/complete` 진입 즉시 `store.addHarvest`가 1회 실행돼 원본 Bunch를 archive(완전 삭제, `Bunch.fillDates`→`Harvest.fillDates` 이관)한다 — 버튼을 누르지 않고 새로고침해도 가득 찬 송이가 목록에 남지 않는다. 화면은 진입 시점의 Bunch를 `useState`로 스냅샷해 렌더하며, archive 이후 직접 재진입하면 보관함으로 보낸다. 두 버튼은 더 이상 보관하지 않고 이동/재시작만 한다:
+- 같은 송이 다시 심기 → 같은 name/unitLabel/total/periodDays로 `store.addBunch`를 호출해 `filled:0`인 **새 Bunch**를 만든다(원본 id·완성 이력과 무관) → 홈으로 이동. 방금 자동 저장된 Harvest는 그대로 남는다
+- 보관함에서 확인하기 → 아무 것도 저장하지 않고 보관함으로 이동만
+- 보관함에서 되돌리기(recall) → `Harvest.fillDates`를 새로 생성되는 `Bunch.fillDates`로 복원 (`store.recallHarvest`가 서버 응답에 없으면 로컬 스냅샷으로 폴백)
+
+`store.harvestBunch`(replant 엔드포인트)는 이 자동화 이후 호출부가 없다 — 서버 라우트는 남아 있으나 클라에서 안 쓴다.
 
 ## 화면 구성
 인증 분기는 `_layout.tsx`의 `Stack.Protected`(`isAuthenticated`, 게스트 포함).
 - `login.tsx` — 로그인(Google/카카오/게스트). URL은 `/login` — `/`는 `(tabs)/index`(홈) 전용이라 로그인 화면을 `index.tsx`로 두면 `/` 라우트가 충돌해 인증 후 빈 화면이 뜬다. 미인증 시 `/`는 `(tabs)` 가드가 막혀 `/login`으로 자동 폴백된다
 - `auth/kakao/callback.tsx` — Kakao authorize 리다이렉트 도착지(웹 전용 렌더). 두 `Stack.Protected` 밖(게스트가 인증 상태로 돌아오므로 가드로 못 막음 → 화면이 직접 `router.replace('/')`로 이탈). 웹 로그인이면 code 교환, 네이티브 로그인이면 code를 `grape://`로 되돌림. code 교환은 마운트당 1회로 가드(같은 code 재교환 시 Kakao KOE320)
 - `(tabs)/index.tsx` — 홈: "포도송이 N개"(필터링 없는 `bunches.length`) + 목록 + 새 송이 만들기
-- `(tabs)/records.tsx` — 기록: 히트맵/스트릭 등 전부 `bunches.fillDates` 기준 (`harvests`는 날짜 기록이 없어 집계에서 제외)
+- `(tabs)/records.tsx` — 기록: **탭바에서 숨김 처리됨**(`(tabs)/_layout.tsx`의 `<Tabs.Screen name="records" options={{ href: null }} />`). 라우트 파일과 통계 로직(`stats.ts`, store, archive/complete 흐름)은 전혀 건드리지 않았고 `/records` 직접 URL/딥링크로는 정상 진입한다. 재노출하려면 `_layout.tsx`의 해당 항목을 `options={{ title: '기록' }}`으로 되돌리면 된다. 지표 계산은 모두 `bunches[].fillDates` + `harvests[].fillDates`를 병합한 값 기준(archive/recall로 송이가 리스트를 오가도 이력이 유지돼 통계가 0으로 빠지지 않음). **단 병합 배열을 두 가지로 나눠 씀** — 혼용 금지:
+
+  | 변수 | 형태 | 쓰는 곳 | 의미 |
+  |---|---|---|---|
+  | `mergedFillDates` | 알 1개당 1항목(중복 유지) | 상단 타이틀 `monthCount`("N월에 M알"), `weeklyAverage`에 넘기는 dates | 채운 **알 개수** |
+  | `uniqueFillDays` | `Set`으로 고유 날짜만 | 캘린더 `activityDays`, `currentStreak` 입력 | 활동한 **날짜** |
+
+  즉 캘린더 on/off·연속은 고유 날짜 기준, 월별 알 수·주 평균은 알 개수(비-dedup) 기준.
 - `(tabs)/archive.tsx` — 보관함: `harvests` 카드 목록. 카드 클릭 시 **`harvest/[id]`로 이동**(원본 `bunch/[id]`가 아님 — 원본은 리셋되어 있어 빈 송이가 보이는 문제 방지)
 - `settings.tsx` — 알림/소리/로그아웃 등
 - `bunch/new.tsx` — 새 송이 생성 모달
 - `bunch/[id].tsx` — 진행 중 송이 상세(채우기/되돌리기/삭제)
-- `bunch/complete.tsx` — 완성 축하 화면, 위 "데이터 모델" 표의 두 버튼
+- `bunch/complete.tsx` — 완성 축하 화면. 진입 시 자동 archive(위 "데이터 모델" 참고), 두 버튼은 이동/재시작만
 - `harvest/[id].tsx` — 수확 상세. `Bunch`를 조회하지 않아 원본이 바뀌어도 항상 수확 당시 모습 유지. 알을 줄이면 `recallHarvest` 동작
 
 ## 구현 참고사항 (이유 있는 코드 — 임의로 "정상화"하지 말 것)
@@ -109,6 +120,7 @@ interface Harvest {
 - **Google 네이티브 리다이렉트 스킴**: `grape://`가 아니라 reversed iOS/Android 클라이언트 ID 스킴이어야 함(Google이 커스텀 스킴을 400으로 거부). `social-auth.ts`가 이 스킴을 계산하고 `app.config.ts`가 네이티브에 등록 — 둘 중 하나만 바꾸지 말 것
 - **Kakao redirect_uri는 웹/네이티브가 서로 다름**: 웹은 `<origin>/auth/kakao/callback`, 네이티브는 `EXPO_PUBLIC_KAKAO_REDIRECT_URI`(호스팅 bounce 페이지). authorize 요청·서버 code 교환에 쓰는 값이 바이트 단위로 같아야 하므로 `signInWithKakao`가 반환한 `redirectUri`를 그대로 서버로 넘김
 - **`social-auth.ts` 최상단 `WebBrowser.maybeCompleteAuthSession()`**: OAuth 리다이렉트로 앱이 다시 열릴 때 대기 중인 세션을 종료시킴 — 지우지 말 것
+- **`Harvest.fillDates` 이관/복원**: `store.addHarvest`(archive)는 삭제되는 `Bunch.fillDates`를 harvest로 옮기고, `store.recallHarvest`는 그걸 새 `Bunch`로 되돌린다. 서버도 같은 이관/복원을 하지만, 두 액션은 서버 응답에 `fillDates`가 비어 오면 로컬 값으로 폴백한다(전환기 안전장치이자 낙관적 상태 정확성용) — 이 폴백은 "서버 응답 변환 코드 금지"의 예외. `records.tsx`가 `bunches`+`harvests`의 `fillDates`를 병합 집계하므로 이관을 빼먹으면 통계가 깨진다
 
 ## 하지 말 것 (이번 단계 스코프 아님)
 - 화면 컴포넌트에서 직접 `fetch` (항상 `store` 액션 → `lib/api.ts` 경유)

@@ -1,5 +1,5 @@
 import { router, useLocalSearchParams } from 'expo-router';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { StyleSheet, Text, View, type LayoutChangeEvent } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -18,9 +18,30 @@ const TITLE_RESERVE = 90;
 
 export default function CompleteScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { getBunch, harvests, harvestBunch, addHarvest, deleteBunch } = useGrapeStore();
-  const bunch = getBunch(id);
+  const { getBunch, harvests, addHarvest, addBunch } = useGrapeStore();
+  // Snapshot the bunch on entry: it is archived (and removed from the store)
+  // automatically below, so it can't be read live for the rest of the screen.
+  const [bunch] = useState(() => getBunch(id));
+  // "완성 송이" count is frozen too — addHarvest grows `harvests` mid-screen.
+  const [harvestCount] = useState(() => harvests.length + 1);
   const [heroSize, setHeroSize] = useState({ width: 0, height: 0 });
+
+  // Reaching this screen means the bunch is full, so archive it right away —
+  // a completed bunch is never left sitting full in the active list even if
+  // the user reloads or leaves without choosing. The buttons below only
+  // navigate or start a new cycle; they no longer archive.
+  const archived = useRef(false);
+  useEffect(() => {
+    if (!bunch || archived.current) return;
+    archived.current = true;
+    void addHarvest(bunch);
+  }, [bunch, addHarvest]);
+
+  // Direct reload of this route after the archive already happened: nothing
+  // to show, so send the user to where the record now lives.
+  useEffect(() => {
+    if (!bunch) router.replace('/(tabs)/archive');
+  }, [bunch]);
 
   const fit = useMemo(
     () => generateFittedBunch(bunch?.total ?? 0, heroSize.width, heroSize.height - TITLE_RESERVE, 32, 7, 4),
@@ -38,18 +59,19 @@ export default function CompleteScreen() {
   const completedAt = new Date(bunch.completedAt ?? bunch.createdAt).getTime();
   const days = Math.max(1, Math.round((completedAt - startedAt) / 86400000));
 
-  // "다시 심기" keeps this bunch cycling: harvest + reset, stays in the
-  // active list. "보관함에서 확인하기" means the user is done growing this
-  // one — it still leaves the same harvest record, but the source bunch is
-  // removed from the active list instead of resetting.
+  // The harvest is already saved. "다시 심기" starts a fresh empty bunch with
+  // the same settings; "보관함에서 확인하기" only moves to the archive.
   const replant = () => {
-    harvestBunch(bunch.id);
+    void addBunch({
+      name: bunch.name,
+      unitLabel: bunch.unitLabel,
+      total: bunch.total,
+      periodDays: bunch.periodDays,
+    });
     router.replace('/(tabs)');
   };
 
   const seeHarvest = () => {
-    addHarvest(bunch);
-    deleteBunch(bunch.id);
     router.replace('/(tabs)/archive');
   };
 
@@ -88,7 +110,7 @@ export default function CompleteScreen() {
             labelSize={FontSize.sm}
           />
           <StatTile label="채운 알" value={`${bunch.total}알`} align="center" labelSize={FontSize.sm} />
-          <StatTile label="완성 송이" value={`${harvests.length + 1}`} align="center" labelSize={FontSize.sm} />
+          <StatTile label="완성 송이" value={`${harvestCount}`} align="center" labelSize={FontSize.sm} />
         </View>
 
         <View style={styles.actions}>

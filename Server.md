@@ -16,11 +16,11 @@
 | `src/app/_layout.tsx` | 인증 분기는 `isAuthenticated`(= `session !== 'signedOut'`) 하나의 불리언 게이트. 게스트와 실사용자를 라우팅 단에서 구분하지 않음. |
 | `src/app/settings.tsx` | `updateSettings` 호출. 프로필 영역의 이름/이메일("지수"/"jisoo@example.com")은 **스토어에 연결되지 않은 하드코딩 값** — 실제 사용자 프로필 조회 액션이 store에 없음. "회원탈퇴" 버튼은 존재하나 연결된 액션 없음(죽은 UI). |
 | `src/app/(tabs)/index.tsx` | 홈. `bunches` 목록 렌더링만, "포도송이 N개"는 필터링 없는 `bunches.length`. |
-| `src/app/(tabs)/records.tsx`, `src/lib/stats.ts` | 스트릭/히트맵/주평균 전부 `bunches[].fillDates`를 **클라이언트에서 계산**(순수 함수, 서버 저장 데이터 없음). 서버는 원본 `fillDates` 배열만 그대로 내려주면 됨 — 집계 API 불필요. |
+| `src/app/(tabs)/records.tsx`, `src/lib/stats.ts` | 스트릭/히트맵/주평균 전부 `bunches[].fillDates` + `harvests[].fillDates`를 중복 없이 병합해 **클라이언트에서 계산**(순수 함수, 서버 저장 데이터 없음). 서버는 두 리스트의 `fillDates` 배열을 그대로 내려주면 됨 — 집계 API 불필요. |
 | `src/app/(tabs)/archive.tsx` | `harvests` 목록 렌더링, 클릭 시 `harvest/[id]`로 이동(원본 `bunch/[id]` 아님). |
 | `src/app/bunch/[id].tsx` | `setFilled`(그래프 셀 클릭/버튼) + `deleteBunch`(삭제 확인 모달). `addOneGrape`는 여기서도 쓰이지 않고 `setFilled(id, filled+1)`을 직접 호출 — **`addOneGrape`는 스토어에 정의만 되어 있고 어떤 화면에서도 호출되지 않는 미사용 액션**. |
 | `src/app/bunch/new.tsx` | `addBunch({name, unitLabel, total, periodDays})` 호출. `detail`은 입력 필드가 아니라 store 내부에서 `unitLabel`로부터 파생됨. |
-| `src/app/bunch/complete.tsx` | 두 버튼의 실제 구현 확인: <br>• "같은 송이 다시 심기" → `harvestBunch(id)` 하나만 호출 (내부에서 `addHarvest` + 리셋을 원자적으로 수행) <br>• "보관함에서 확인하기" → `addHarvest(bunch)` + `deleteBunch(bunch.id)` **두 액션을 화면에서 직접 순차 호출**(store에 합쳐진 액션 없음) |
+| `src/app/bunch/complete.tsx` | 진입 시 `addHarvest(bunch)`를 1회 자동 호출해 원본을 archive(`POST /api/bunches/{id}/archive`). 두 버튼은 서버 호출 없음/이동만: <br>• "같은 송이 다시 심기" → `addBunch({name, unitLabel, total, periodDays})`로 새 Bunch 생성 후 홈 이동 <br>• "보관함에서 확인하기" → 보관함으로 이동만 |
 | `src/app/harvest/[id].tsx` | `recallHarvest(harvestId, filled)` 호출 후 반환된 새 `Bunch.id`로 `/bunch/{id}`로 이동. `deleteHarvest` 별도 호출(삭제 모달). |
 
 ---
@@ -38,8 +38,8 @@
 | `addBunch` | `POST /api/bunches` | |
 | `setFilled` | `PATCH /api/bunches/{id}/fill` | |
 | `addOneGrape` | *(엔드포인트 설계 안 함)* | 어느 화면에서도 호출 안 됨 + `setFilled(id, filled+1)`과 완전히 동일한 효과 → 중복 엔드포인트 불필요 |
-| `harvestBunch`(다시 심기 경로) | `POST /api/bunches/{id}/replant` | §3-4 근거 참고 |
-| `addHarvest`+`deleteBunch`(보관함 경로) | `POST /api/bunches/{id}/archive` | §3-4 근거 참고 |
+| `harvestBunch`(다시 심기 경로) | `POST /api/bunches/{id}/replant` | §3-4 근거 참고. **현재 클라 호출부 없음**(complete 화면 자동화 이후 미사용) — 라우트는 유지 |
+| `addHarvest`(보관함 경로, complete 진입 시 자동 + harvest 화면) | `POST /api/bunches/{id}/archive` | §3-4 근거 참고 |
 | `deleteBunch`(단독 삭제, bunch 상세 화면) | `DELETE /api/bunches/{id}` | |
 | `deleteHarvest` | `DELETE /api/harvests/{id}` | |
 | (목록 조회, `harvests` state) | `GET /api/harvests`, `GET /api/harvests/{id}` | |
@@ -114,18 +114,18 @@ interface Bunch {
 - 응답 200: `Bunch`
 - 서버 로직(클라이언트 `applyFilled` 그대로 이식 — 게이팅 로직 추가 금지, 클램프만 유지):
   1. `clamped = max(0, min(total, filled))`
-  2. `clamped > 기존 filled`면 `fill_date = today`를 **한 건만** append(요청 1회당 최대 1건 — 몇 알이 늘든 상관없이 1건인 클라이언트 동작과 동일)
+  2. `gained = clamped - 기존 filled`가 양수면 `fill_date = today` 행을 **`gained` 건** append(늘어난 알 수만큼 — 한 번에 3알 늘면 3건. 클라이언트 `applyFilled`와 동일). 감소 시에는 기존 행을 지우지 않음
   3. `clamped === total`이면 `completedAt`을 기존 값 유지 또는 `now`로 세팅, 아니면 `completedAt = null`(총량 밑으로 다시 내려가면 완성 해제)
 
 #### `POST /api/bunches/{id}/replant` — "같은 송이 다시 심기"
 - 요청: `{}`
 - 응답 200: `{ "harvest": Harvest, "bunch": Bunch }`
-- 트랜잭션: `harvests`에 스냅샷 insert + 같은 `bunches` row를 `filled=0, completedAt=null, createdAt=now, completions=completions+1`로 갱신(row 자체는 삭제되지 않음).
+- 트랜잭션: `harvests`에 스냅샷 insert(`fillDates = []` — row가 살아남아 계속 누적하므로 스냅샷엔 날짜를 담지 않음, 중복 집계 방지) + 같은 `bunches` row를 `filled=0, completedAt=null, createdAt=now, completions=completions+1`로 갱신(row·`fill_events` 모두 삭제되지 않음, `fillDates`는 사이클을 넘어 누적).
 
 #### `POST /api/bunches/{id}/archive` — "보관함에서 확인하기"
 - 요청: `{}`
 - 응답 200: `{ "harvest": Harvest }`
-- 트랜잭션: `harvests`에 스냅샷 insert + 해당 `bunches` row 삭제(연쇄로 `bunch_fill_events`도 삭제, §5).
+- 트랜잭션: `harvests`에 스냅샷 insert(`fillDates = 원본 bunch의 fillDates 전체`) + 해당 `bunches` row 삭제. **`fill_events` 행은 삭제하지 않고 harvest로 재귀속**(§5) — 통계가 보관 후에도 이 날짜들을 계속 세야 하므로.
 
 > **왜 하나의 엔드포인트(모드 파라미터)로 안 합쳤나**: 두 버튼은 "송이가 살아남는가/사라지는가"라는 상호배타적이고 되돌릴 수 없는 결과를 만든다. 하나의 `POST /bunches/{id}/harvest`에 `{mode: "replant"|"archive"}`를 넣는 방식은, 클라이언트 버그나 잘못된 값 하나로 사용자의 진행 중 송이가 조용히 삭제될 수 있는 위험을 만든다. 두 화면 버튼과 1:1 대응하는 의도가 분명한 엔드포인트로 분리하는 편이 오조작 위험이 낮고 각 트랜잭션도 단일 책임으로 단순해진다.
 
@@ -140,6 +140,7 @@ interface Bunch {
 ```ts
 interface Harvest {
   id: string; sourceBunchId: string; name: string; count: number; harvestedAt: string;
+  fillDates: string[];   // archive: 원본 Bunch.fillDates 전체를 이관 / replant: []. recall이 새 Bunch로 복원
 }
 ```
 
@@ -155,7 +156,8 @@ interface Harvest {
 - 트랜잭션: 해당 `harvests` row 삭제 + `bunches`에 새 row insert:
   - `id`: 새로 생성(원본 `sourceBunchId`를 재사용하지 않음 — 클라이언트 주석과 동일 이유: 그 id는 이미 전혀 다른 사이클을 돌고 있을 수 있음)
   - `name = harvest.name`, `total = harvest.count`, `filled = clamp(0, harvest.count, 요청값)`
-  - `detail = ""`, `unitLabel = ""`, `periodDays = 0`, `fillDates = []`, `completions = 0` — 하베스트 스냅샷에 없던 필드라 복원 불가(클라이언트 `recallHarvest` 주석과 동일하게 명시적으로 빈 값)
+  - `fillDates = harvest.fillDates` — 보관 시 이관해 둔 채움 이력을 그대로 복원(`fill_events`를 새 bunch_id로 재귀속). 클라이언트 `recallHarvest`도 응답이 비면 로컬 스냅샷으로 폴백
+  - `detail = ""`, `unitLabel = ""`, `periodDays = 0`, `completions = 0` — 하베스트 스냅샷에 없던 필드라 복원 불가(명시적으로 빈 값)
 
 ### 3-5. 설정
 
@@ -223,18 +225,24 @@ INDEX (user_id)
 ```
 
 ```
-bunch_fill_events                                  -- Bunch.fillDates[] 를 정규화한 append-only 로그
+fill_events                                        -- Bunch/Harvest 의 fillDates[] 를 정규화한 append-only 로그
 ──────────────────────────────────────────────
 id                 BIGINT        PK, GENERATED ALWAYS AS IDENTITY
-bunch_id           UUID          NOT NULL, FK → bunches.id ON DELETE CASCADE
+bunch_id           UUID          NULL, FK → bunches.id  ON DELETE CASCADE
+harvest_id         UUID          NULL, FK → harvests.id ON DELETE CASCADE
 fill_date          DATE          NOT NULL          -- toDateKey() 형식(YYYY-MM-DD)과 동일
 created_at         TIMESTAMPTZ   NOT NULL DEFAULT now()   -- 정렬용, 응답에는 노출 안 함
 
-INDEX (bunch_id, created_at)
+CHECK (num_nonnulls(bunch_id, harvest_id) = 1)     -- 정확히 한쪽에만 귀속
+INDEX (bunch_id, created_at), INDEX (harvest_id, created_at)
 ```
-- 한 행 = 한 번의 "채움 증가" 이벤트. `fillDates` 응답은 `SELECT fill_date FROM bunch_fill_events WHERE bunch_id=? ORDER BY created_at ASC`로 재구성.
-- 같은 날짜가 여러 번 들어갈 수 있음(클라이언트가 `Set` 없이 매번 append하고, `records.tsx`의 "이번 달 N알" 집계도 중복 포함 카운트를 그대로 쓰기 때문 — 여기서 중복을 걸러내면 클라이언트 집계 결과가 달라짐).
-- 송이가 완전히 삭제(`/archive`, `DELETE /bunches/{id}`)될 때만 같이 삭제됨. `/replant`(다시 심기)는 `bunches` row를 삭제하지 않으므로 `fillDates`는 사이클을 넘어 계속 누적(클라이언트 주석 "수확해도 초기화 안 됨"과 동일).
+- 한 행 = 한 번의 "채움 증가" 이벤트. `Bunch.fillDates`는 `WHERE bunch_id=?`, `Harvest.fillDates`는 `WHERE harvest_id=?`로 `ORDER BY created_at ASC` 재구성.
+- 한 날짜가 여러 행일 수 있음: 늘어난 알 1개당 1행이라 하루에 여러 알을 채우면 그 날짜가 여러 번 들어간다. 서버는 이벤트를 있는 그대로 내려주고 중복 필터링은 하지 않는다 — `records.tsx`가 `bunches`+`harvests`의 `fillDates`를 병합한 뒤, 캘린더/스트릭은 `Set`으로 고유 날짜만, "N월에 M알"/주 평균은 중복 유지 배열(=채운 알 수)로 각각 계산한다.
+- 귀속 이동:
+  - `/archive` → 해당 이벤트를 `bunch_id=NULL, harvest_id=<새 harvest>`로 UPDATE(삭제 아님), 그 뒤 `bunches` row 삭제.
+  - `/recall` → `harvest_id=NULL, bunch_id=<새 bunch>`로 UPDATE, 그 뒤 `harvests` row 삭제.
+  - `/replant` → 이동 없음. `bunches` row가 살아있어 이벤트도 그 bunch에 계속 누적(클라이언트 "수확해도 초기화 안 됨"과 동일). replant harvest에는 이벤트를 만들지 않음.
+  - `DELETE /bunches/{id}`(완성 전 폐기) → 연쇄 삭제(그 송이는 harvest를 남기지 않으므로 이력도 사라지는 게 맞음).
 
 ```
 harvests
@@ -269,5 +277,5 @@ fill_sound         BOOLEAN       NOT NULL DEFAULT true
 
 ## 6. 참고 — 클라이언트 그대로 옮기지 않은 부분
 
-- `bunches`/`harvests` 리스트는 여전히 완전히 분리된 두 테이블. `completions`(1:N 반복 수확), 축약 스냅샷(`detail`/`unitLabel`/`periodDays`/`fillDates` 없음), 고아 참조 허용 — AGENTS.md와 클라이언트 타입 주석에 명시된 세 가지 근거를 그대로 스키마에 반영했습니다.
-- 스트릭/히트맵/주 평균 계산은 서버에 옮기지 않았습니다. `lib/stats.ts`가 순수 함수로 클라이언트에만 존재하고, 서버는 원본 `fillDates` 배열만 정확히 복제해 내려주면 됩니다(집계 API 불필요).
+- `bunches`/`harvests` 리스트는 여전히 완전히 분리된 두 테이블. `completions`(1:N 반복 수확), 축약 스냅샷(`detail`/`unitLabel`/`periodDays` 없음), 고아 참조 허용 — AGENTS.md와 클라이언트 타입 주석에 명시된 근거를 그대로 스키마에 반영했습니다. 단 `fillDates`는 예외로 `Harvest`도 보유합니다: archive 시 원본 `Bunch.fillDates`를 이관해 통계(스트릭/히트맵/주 평균)가 보관 후에도 그 날짜들을 계속 세도록 하고, recall 시 새 `Bunch`로 되돌립니다. replant harvest는 `[]`.
+- 스트릭/히트맵/주 평균 계산은 서버에 옮기지 않았습니다. `lib/stats.ts`가 순수 함수로 클라이언트에만 존재하고, 서버는 `bunches`/`harvests` 양쪽의 `fillDates` 배열만 정확히 복제해 내려주면 됩니다(집계 API 불필요). 클라이언트가 두 배열을 병합·중복 제거합니다.
