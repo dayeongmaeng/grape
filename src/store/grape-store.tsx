@@ -53,6 +53,8 @@ interface GrapeStore {
   bunches: Bunch[];
   harvests: Harvest[];
   settings: NotificationSettings;
+  /** current account (nickname + provider) from GET /api/users/me, or null before hydrate */
+  user: api.AuthUser | null;
   guest: boolean;
   isAuthenticated: boolean;
   /** true until a stored session (if any) has been restored on launch */
@@ -102,6 +104,7 @@ export function GrapeStoreProvider({ children }: { children: ReactNode }) {
   const [bunches, setBunches] = useState<Bunch[]>([]);
   const [harvests, setHarvests] = useState<Harvest[]>([]);
   const [settings, setSettings] = useState<NotificationSettings>(DEFAULT_SETTINGS);
+  const [user, setUser] = useState<api.AuthUser | null>(null);
   const [session, setSession] = useState<'signedOut' | 'guest' | 'signedIn'>('signedOut');
   const [isBootstrapping, setIsBootstrapping] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
@@ -126,6 +129,7 @@ export function GrapeStoreProvider({ children }: { children: ReactNode }) {
     setIsLoading(true);
     try {
       const [me] = await Promise.all([api.getMe(), loadLists()]);
+      setUser(me);
       setSession(me.provider === 'GUEST' ? 'guest' : 'signedIn');
       setError(null);
     } finally {
@@ -231,6 +235,7 @@ export function GrapeStoreProvider({ children }: { children: ReactNode }) {
       setBunches([]);
       setHarvests([]);
       setSettings(DEFAULT_SETTINGS);
+      setUser(null);
       setSession('signedOut');
       setError(null);
     })();
@@ -406,6 +411,7 @@ export function GrapeStoreProvider({ children }: { children: ReactNode }) {
       bunches,
       harvests,
       settings,
+      user,
       guest: session === 'guest',
       isAuthenticated,
       isBootstrapping,
@@ -432,6 +438,7 @@ export function GrapeStoreProvider({ children }: { children: ReactNode }) {
       bunches,
       harvests,
       settings,
+      user,
       session,
       isAuthenticated,
       isBootstrapping,

@@ -1,5 +1,5 @@
 import { router } from 'expo-router';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Linking, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { HeaderBar } from '@/components/header-bar';
@@ -9,8 +9,20 @@ import { ToggleSwitch } from '@/components/toggle-switch';
 import { Colors, FontSize, Fonts, Radius, Spacing, gradientBackground } from '@/constants/theme';
 import { useGrapeStore } from '@/store/grape-store';
 
+const PRIVACY_URL = 'https://grape.kkori.co.kr/privacy';
+const TERMS_URL = 'https://grape.kkori.co.kr/terms';
+
+const PROVIDER_LABEL: Record<string, string> = {
+  GUEST: '게스트',
+  GOOGLE: '구글 로그인',
+  KAKAO: '카카오 로그인',
+};
+
 export default function SettingsScreen() {
-  const { settings, updateSettings, guest, logout } = useGrapeStore();
+  const { settings, updateSettings, user, guest, logout } = useGrapeStore();
+
+  const providerLabel = PROVIDER_LABEL[user?.provider ?? ''] ?? (guest ? '게스트' : '로그인');
+  const displayName = user?.nickname?.trim() || (guest ? '게스트' : '포도알');
 
   return (
     <ScreenBackground>
@@ -21,12 +33,9 @@ export default function SettingsScreen() {
           <View style={styles.profile}>
             <View style={styles.avatar} />
             <View style={styles.profileText}>
-              <Text style={styles.profileName}>{guest ? '게스트' : '지수'}</Text>
-              <Text style={styles.profileEmail}>
-                {guest ? '로그인하면 기록이 안전하게 보관돼요' : 'jisoo@example.com'}
-              </Text>
+              <Text style={styles.profileName}>{displayName}</Text>
+              <Text style={styles.profileEmail}>{providerLabel}</Text>
             </View>
-            {!guest && <Text style={styles.editLink}>편집</Text>}
           </View>
 
           <SettingsSection title="알림">
@@ -64,6 +73,11 @@ export default function SettingsScreen() {
             <SettingsRow label="데이터 백업" disabled right={<Badge label="준비 중" />} />
             <SettingsRow label="기록 내보내기" disabled right={<Badge label="준비 중" />} />
             <SettingsRow label="문의하기" />
+            <SettingsRow
+              label="개인정보처리방침"
+              onPress={() => Linking.openURL(PRIVACY_URL)}
+            />
+            <SettingsRow label="이용약관" onPress={() => Linking.openURL(TERMS_URL)} />
             <SettingsRow label="버전" right={<Text style={styles.mutedValue}>1.0.2</Text>} divider={false} />
           </SettingsSection>
 
@@ -122,11 +136,6 @@ const styles = StyleSheet.create({
     fontSize: FontSize.xs,
     color: Colors.textSecondary,
     marginTop: 3,
-  },
-  editLink: {
-    fontFamily: Fonts.sans,
-    fontSize: FontSize.xs,
-    color: Colors.gold,
   },
   goldValue: {
     fontFamily: Fonts.sans,
