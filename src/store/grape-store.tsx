@@ -5,6 +5,13 @@ import type { Bunch, Harvest, NotificationSettings } from '@/types/grape';
 import { toDateKey } from '@/lib/stats';
 import * as api from '@/lib/api';
 import { ApiError } from '@/lib/api';
+import {
+  SocialAuthCancelled,
+  configureSocialAuth,
+  signInWithGoogle,
+  signInWithKakao,
+  type SocialProvider,
+} from '@/lib/social-auth';
 
 const DEFAULT_SETTINGS: NotificationSettings = {
   dailyReminder: true,
@@ -49,7 +56,13 @@ interface GrapeStore {
   clearError: () => void;
   /** re-fetch bunches/harvests/settings from the server */
   refresh: () => Promise<void>;
-  loginContinue: () => void;
+  /** Google / Kakao social login. Merges the current guest's data when signed in as a guest. */
+  loginContinue: (provider: SocialProvider) => void;
+  /**
+   * Web Kakao only: finishes the login started by `loginContinue('kakao')` after the redirect back
+   * to `/auth/kakao/callback`, exchanging the authorization code. Resolves `true` on success.
+   */
+  completeKakaoWebLogin: (code: string, redirectUri: string) => Promise<boolean>;
   loginAsGuest: () => void;
   logout: () => void;
   getBunch: (id: string) => Bunch | undefined;
@@ -118,6 +131,11 @@ export function GrapeStoreProvider({ children }: { children: ReactNode }) {
     }
   }, [loadLists, fail]);
 
+  // Log any missing OAuth config once on launch (expo-auth-session builds requests lazily).
+  useEffect(() => {
+    configureSocialAuth();
+  }, []);
+
   // Restore a stored session on launch.
   useEffect(() => {
     let cancelled = false;
@@ -151,12 +169,51 @@ export function GrapeStoreProvider({ children }: { children: ReactNode }) {
     })();
   }, [hydrate, fail]);
 
-  const loginContinue = useCallback(() => {
-    // The server wiring (api.loginWithGoogle / loginWithKakao, incl. guest-merge header) is done.
-    // Obtaining a real Google/Kakao SDK token is a separate task — stubbed for now.
-    setError('소셜 로그인은 아직 준비 중이에요.');
-    Alert.alert('준비 중', '소셜 로그인은 곧 지원돼요. 지금은 게스트로 시작할 수 있어요.');
-  }, []);
+  const loginContinue = useCallback<GrapeStore['loginContinue']>(
+    (provider) => {
+      void (async () => {
+        try {
+          // When upgrading from a guest, pass its access token so the server merges the data (§3-1).
+          const guestAccessToken =
+            session === 'guest' ? await api.getCurrentGuestAccessToken() : undefined;
+
+          if (provider === 'google') {
+            const idToken = await signInWithGoogle();
+            await api.loginWithGoogle(idToken, guestAccessToken);
+          } else {
+            // On web this redirects and never resolves; login finishes in completeKakaoWebLogin.
+            const { code, redirectUri } = await signInWithKakao();
+            await api.loginWithKakaoCode(code, redirectUri, guestAccessToken);
+          }
+          await hydrate();
+        } catch (e) {
+          if (e instanceof SocialAuthCancelled) return; // user dismissed the sheet — no error UI
+          console.error('[social-auth] login failed', e); // Alert.alert is a no-op on web
+          fail(e, '소셜 로그인에 실패했어요');
+          Alert.alert('로그인 실패', '소셜 로그인에 실패했어요. 잠시 후 다시 시도해 주세요.');
+        }
+      })();
+    },
+    [session, hydrate, fail],
+  );
+
+  const completeKakaoWebLogin = useCallback<GrapeStore['completeKakaoWebLogin']>(
+    (code, redirectUri) =>
+      (async () => {
+        try {
+          // Re-read the guest token post-redirect: the guest session is still in token-store.
+          const guestAccessToken =
+            session === 'guest' ? await api.getCurrentGuestAccessToken() : undefined;
+          await api.loginWithKakaoCode(code, redirectUri, guestAccessToken);
+          await hydrate();
+          return true;
+        } catch (e) {
+          fail(e, '소셜 로그인에 실패했어요');
+          return false;
+        }
+      })(),
+    [session, hydrate, fail],
+  );
 
   const logout = useCallback(() => {
     void (async () => {
@@ -335,6 +392,7 @@ export function GrapeStoreProvider({ children }: { children: ReactNode }) {
       clearError,
       refresh,
       loginContinue,
+      completeKakaoWebLogin,
       loginAsGuest,
       logout,
       getBunch,
@@ -360,6 +418,7 @@ export function GrapeStoreProvider({ children }: { children: ReactNode }) {
       clearError,
       refresh,
       loginContinue,
+      completeKakaoWebLogin,
       loginAsGuest,
       logout,
       getBunch,

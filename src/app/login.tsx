@@ -37,14 +37,14 @@ export default function LoginScreen() {
             variant="solid"
             backgroundColor={Colors.google}
             textColor={Colors.googleText}
-            onPress={loginContinue}
+            onPress={() => loginContinue('google')}
           />
           <Button
             label="카카오로 계속하기"
             variant="solid"
             backgroundColor={Colors.kakao}
             textColor={Colors.kakaoText}
-            onPress={loginContinue}
+            onPress={() => loginContinue('kakao')}
           />
           <Button
             label={<Text style={styles.guestLabel}>로그인 없이 먼저 둘러보기</Text>}

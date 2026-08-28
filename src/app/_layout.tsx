@@ -38,8 +38,11 @@ function RootNavigator() {
         contentStyle: { backgroundColor: Colors.bgTop },
       }}>
       <Stack.Protected guard={!isAuthenticated}>
-        <Stack.Screen name="index" />
+        <Stack.Screen name="login" />
       </Stack.Protected>
+      {/* Kakao web redirect target — reachable regardless of auth state (a guest returns here
+          already "authenticated", so it must sit outside both Protected groups). */}
+      <Stack.Screen name="auth/kakao/callback" />
       <Stack.Protected guard={isAuthenticated}>
         <Stack.Screen name="(tabs)" />
         <Stack.Screen name="settings" options={{ animation: 'slide_from_right' }} />

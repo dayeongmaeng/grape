@@ -134,8 +134,8 @@ export async function loginAsGuest(): Promise<AuthUser> {
 }
 
 /**
- * The Google OAuth SDK is not wired yet — the caller must supply an `idToken`. When the current
- * session is a guest, pass its access token so the server merges the guest data (§3-1).
+ * `idToken` comes from `social-auth.signInWithGoogle` (expo-auth-session, same on web and native).
+ * When the current session is a guest, pass its access token so the server merges the guest data (§3-1).
  */
 export async function loginWithGoogle(idToken: string, guestAccessToken?: string): Promise<AuthUser> {
   const res = await send(
@@ -149,11 +149,19 @@ export async function loginWithGoogle(idToken: string, guestAccessToken?: string
   return data.user;
 }
 
-/** See {@link loginWithGoogle}; request body carries the Kakao SDK access token. */
-export async function loginWithKakao(kakaoAccessToken: string, guestAccessToken?: string): Promise<AuthUser> {
+/**
+ * Kakao login (web and native both). The client only ever obtains a redirect authorization code;
+ * the server exchanges it for an access token. `redirectUri` must be byte-identical to the one used
+ * in the authorize call. See {@link loginWithGoogle} for the guest-merge header.
+ */
+export async function loginWithKakaoCode(
+  code: string,
+  redirectUri: string,
+  guestAccessToken?: string,
+): Promise<AuthUser> {
   const res = await send(
-    '/api/auth/kakao',
-    { method: 'POST', body: JSON.stringify({ accessToken: kakaoAccessToken }) },
+    '/api/auth/kakao/web',
+    { method: 'POST', body: JSON.stringify({ code, redirectUri }) },
     guestAccessToken,
   );
   if (!res.ok) throw await toApiError(res);

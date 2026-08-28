@@ -3,7 +3,10 @@
 악기 연습, 다회독, 운동 등 반복 행위를 "포도송이" 단위로 만들어 기록한다.
 
 - **grape-api 서버(Spring Boot)에 연결돼 있다.** 게스트/소셜 로그인 + 개인 데이터 서버 동기화까지가 현재 범위. 전역 상태(`grape-store.tsx`)의 모든 액션이 `src/lib/api.ts`를 통해 실제 API를 호출한다. `setFilled`/삭제/설정은 낙관적(즉시 반영 후 실패 시 `refresh()` 롤백), **생성(`addBunch`)은 서버 응답을 기다린 뒤 상태에 추가**한다 — 클라가 임시 id를 만들지 않으므로 이후 모든 액션이 실제 UUID를 대상으로 한다.
-- 소셜 로그인(Google/Kakao)은 **서버 배선까지만** 완료 — 실제 OAuth SDK로 provider 토큰을 발급받는 부분은 스텁(`loginContinue`). 게스트 로그인은 완전 동작.
+- 소셜 로그인(Google/Kakao)은 **매니지드 워크플로 방식으로 연동 완료**(kkori 앱과 동일한 방식) — 네이티브 로그인 SDK 없이 `expo-auth-session` + `expo-web-browser`로 시스템 브라우저를 띄운다. `loginContinue(provider)`가 `src/lib/social-auth.ts`로 provider 자격증명을 받아 `api.loginWith*`에 넘긴다. 게스트 세션에서 호출하면 현재 access 토큰을 guest-merge 헤더로 함께 보낸다.
+  - **Google**: 웹은 implicit `id_token token` 흐름, iOS/Android는 authorization code + PKCE를 클라에서 교환. 어느 플랫폼이든 결과는 idToken 하나 → `POST /api/auth/google`(`aud`는 모든 플랫폼에서 Web 클라이언트 ID). 네이티브 리다이렉트는 reversed-client-ID 스킴(`com.googleusercontent.apps.<id>`)으로 돌아오며 `app.config.ts`가 이 스킴을 Info.plist(iOS)/intent filter(Android, Android 클라이언트 ID 설정 시)에 주입한다.
+  - **Kakao**: REST API 키로 authorize URL을 만들고 인앱 브라우저를 띄운다. 웹/네이티브 **모두** authorization code만 얻어 `POST /api/auth/kakao/web`으로 서버가 교환한다(네이티브 access token 경로 없음). 네이티브는 `EXPO_PUBLIC_KAKAO_REDIRECT_URI`(Kakao 콘솔 등록)로 지정한 호스팅 페이지가 code를 `grape://auth/kakao/callback` 딥링크로 되돌린다 — 이 호스팅 페이지가 곧 `src/app/auth/kakao/callback.tsx`가 웹에서 렌더될 때의 동작이다. 웹 로그인이면 같은 라우트가 `store.completeKakaoWebLogin`으로 code를 교환한다. 콜백 라우트는 `_layout.tsx`에서 두 `Stack.Protected` 밖에 둔다(게스트가 인증 상태로 돌아오므로).
+  - 네이티브 로그인 SDK가 없어 로그인 코드 자체는 Expo Go에서도 돈다. 단 `app.config.ts`가 주입하는 URL 스킴은 네이티브 빌드(`expo prebuild` / EAS)에서만 반영된다.
 - "친구와 함께 보기"(공유) 기능은 여전히 향후 계획 — 미리 구현하거나 대비 코드를 넣지 말 것.
 
 ## 기술 스택
@@ -13,6 +16,7 @@
 | 영역 | 선택 | 비고 |
 |---|---|---|
 | 라우팅 | expo-router (파일 기반) | `<Stack>`/`<Tabs>` 직접 조립 안 함 |
+| 소셜 로그인 | `expo-auth-session` + `expo-crypto` + `expo-web-browser` | 네이티브 SDK 없음(kkori와 동일 방식). `app.config.ts`가 env의 Google 클라이언트 ID로 reversed-client-ID URL 스킴을 주입 |
 | 상태관리 | React Context (`grape-store.tsx`) | 유일한 전역 상태. Zustand 아님. 액션 = 낙관적 로컬 갱신 + `api.ts` 호출 |
 | 서버 통신 | `fetch` 래퍼 (`src/lib/api.ts`) | Bearer 자동 첨부, 401 시 refresh 토큰 로테이션 후 1회 재시도 |
 | 토큰 저장 | `expo-secure-store` (네이티브) / `localStorage` (웹) | `src/lib/token-store.ts`. access + refresh |
@@ -22,7 +26,7 @@
 | 아이콘 | lucide-react-native | 뒤로가기=ChevronLeft, 삭제=Trash2 |
 | 폰트 | Gowun Batang(타이틀) / Noto Sans KR(본문) | |
 | 테스트 | 없음 | 검증은 `npm run lint` + 수동 확인 |
-| 환경변수 | `.env.development` / `.env.production` | `EXPO_PUBLIC_API_BASE_URL` — dev `http://localhost:8080`, prod `https://grape.kkori.co.kr`. `eas.json`은 아직 없음 |
+| 환경변수 | `.env.development` / `.env.production` | `EXPO_PUBLIC_API_BASE_URL` — dev `http://localhost:8080`, prod `https://grape.kkori.co.kr`. 소셜 로그인: `EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID` / `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID`(idToken aud = 서버 `GOOGLE_OAUTH_CLIENT_ID`와 동일) / `EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID`(iOS 전용이라 비어 있음) / `EXPO_PUBLIC_KAKAO_REST_API_KEY`(authorize URL + 서버 code 교환, kkori와 같은 Kakao 앱) / `EXPO_PUBLIC_KAKAO_REDIRECT_URI`(선택 — 웹은 `<origin>/auth/kakao/callback` 기본, 네이티브 dev는 `localhost:8081` 기본, 네이티브 배포는 필수). `eas.json`은 아직 없음 |
 
 > 참고용 웹 프로토타입(.html)이 있지만 실제 구현은 위 RN 스택으로 하며, 마크업이 아닌 색상/간격/레이아웃 값만 가져온다.
 
@@ -38,7 +42,7 @@ npx expo start / npm start / npm run android / npm run ios / npm run web / npm r
 - `components/` — 공유 UI. 파일명 kebab-case, export명 PascalCase
 - `constants/` — `theme.ts`(디자인 토큰), `grape-shapes.ts`(포도송이 도형 계산)
 - `store/` — 전역 상태. `grape-store.tsx` 하나뿐. 새 전역 상태도 여기 합칠 것(Context 파편화 금지)
-- `lib/` — React/상태 비의존 로직: `stats.ts`(순수 함수), `api.ts`(서버 클라이언트), `token-store.ts`(토큰 저장). 서버 호출은 항상 `api.ts`를 거치고 화면에서 직접 `fetch` 하지 말 것
+- `lib/` — React/상태 비의존 로직: `stats.ts`(순수 함수), `api.ts`(서버 클라이언트), `token-store.ts`(토큰 저장), `social-auth.ts`(`expo-auth-session`/`expo-web-browser` 기반 Google/Kakao OAuth 클라이언트, 플랫폼 분기), `in-app-browser.ts`(KakaoTalk 인앱 브라우저 탈출 유틸, 웹 전용). 서버 호출은 항상 `api.ts`를, 소셜 로그인 호출은 항상 `social-auth.ts`를 거치고 화면에서 직접 부르지 말 것(Kakao 콜백 화면만 `consumeKakaoOauthState`/`hasPendingKakaoWebLogin`/`escapeKakaoTalkInAppBrowser`를 예외적으로 import)
 - `types/` — 여러 곳에서 공유하는 타입만 (`grape.ts`). 컴포넌트 전용 props 타입은 그 파일 안에
 
 ## 코딩 컨벤션
@@ -85,7 +89,8 @@ interface Harvest {
 
 ## 화면 구성
 인증 분기는 `_layout.tsx`의 `Stack.Protected`(`isAuthenticated`, 게스트 포함).
-- `index.tsx` — 로그인(Google/카카오/게스트)
+- `login.tsx` — 로그인(Google/카카오/게스트). URL은 `/login` — `/`는 `(tabs)/index`(홈) 전용이라 로그인 화면을 `index.tsx`로 두면 `/` 라우트가 충돌해 인증 후 빈 화면이 뜬다. 미인증 시 `/`는 `(tabs)` 가드가 막혀 `/login`으로 자동 폴백된다
+- `auth/kakao/callback.tsx` — Kakao authorize 리다이렉트 도착지(웹 전용 렌더). 두 `Stack.Protected` 밖(게스트가 인증 상태로 돌아오므로 가드로 못 막음 → 화면이 직접 `router.replace('/')`로 이탈). 웹 로그인이면 code 교환, 네이티브 로그인이면 code를 `grape://`로 되돌림. code 교환은 마운트당 1회로 가드(같은 code 재교환 시 Kakao KOE320)
 - `(tabs)/index.tsx` — 홈: "포도송이 N개"(필터링 없는 `bunches.length`) + 목록 + 새 송이 만들기
 - `(tabs)/records.tsx` — 기록: 히트맵/스트릭 등 전부 `bunches.fillDates` 기준 (`harvests`는 날짜 기록이 없어 집계에서 제외)
 - `(tabs)/archive.tsx` — 보관함: `harvests` 카드 목록. 카드 클릭 시 **`harvest/[id]`로 이동**(원본 `bunch/[id]`가 아님 — 원본은 리셋되어 있어 빈 송이가 보이는 문제 방지)
@@ -101,6 +106,9 @@ interface Harvest {
 - **탭바 아이콘 숨김**: `tabBarIcon: () => null`만으로는 공간이 예약되어 남음 → `tabBarIconStyle`로 0×0 처리 필요
 - **탭바 상단 구분선**: `tabBarStyle.borderTopColor`가 웹에서 다른 값에 밀릴 수 있어 테두리는 0으로 없애고 `tabBarBackground`로 직접 그림
 - **삭제 아이콘 색**: 화면에 상시 노출될 땐 `Colors.textTertiary`, 삭제 확정 모달의 버튼 안에서만 `Colors.textDanger` — 확정 전 아이콘을 빨갛게 칠하지 말 것
+- **Google 네이티브 리다이렉트 스킴**: `grape://`가 아니라 reversed iOS/Android 클라이언트 ID 스킴이어야 함(Google이 커스텀 스킴을 400으로 거부). `social-auth.ts`가 이 스킴을 계산하고 `app.config.ts`가 네이티브에 등록 — 둘 중 하나만 바꾸지 말 것
+- **Kakao redirect_uri는 웹/네이티브가 서로 다름**: 웹은 `<origin>/auth/kakao/callback`, 네이티브는 `EXPO_PUBLIC_KAKAO_REDIRECT_URI`(호스팅 bounce 페이지). authorize 요청·서버 code 교환에 쓰는 값이 바이트 단위로 같아야 하므로 `signInWithKakao`가 반환한 `redirectUri`를 그대로 서버로 넘김
+- **`social-auth.ts` 최상단 `WebBrowser.maybeCompleteAuthSession()`**: OAuth 리다이렉트로 앱이 다시 열릴 때 대기 중인 세션을 종료시킴 — 지우지 말 것
 
 ## 하지 말 것 (이번 단계 스코프 아님)
 - 화면 컴포넌트에서 직접 `fetch` (항상 `store` 액션 → `lib/api.ts` 경유)
