@@ -75,6 +75,12 @@ interface GrapeStore {
   completeKakaoWebLogin: (code: string, redirectUri: string) => Promise<boolean>;
   loginAsGuest: () => void;
   logout: () => void;
+  /**
+   * Permanently deletes the account (DELETE /api/users/me — immediate hard delete + FK cascade on
+   * the server) and signs out. Resolves `true` on success, `false` if the request failed (the
+   * session is kept so the user can retry).
+   */
+  deleteAccount: () => Promise<boolean>;
   getBunch: (id: string) => Bunch | undefined;
   /**
    * Creates a bunch on the server, then adds it to state (a bunch never exists client-side without a
@@ -240,6 +246,29 @@ export function GrapeStoreProvider({ children }: { children: ReactNode }) {
       setError(null);
     })();
   }, []);
+
+  const deleteAccount = useCallback<GrapeStore['deleteAccount']>(
+    () =>
+      (async () => {
+        try {
+          await api.deleteMe();
+        } catch (e) {
+          fail(e, '회원탈퇴에 실패했어요');
+          return false;
+        }
+        // The server already dropped the account and cascaded its refresh tokens; the logout
+        // call is best-effort token cleanup, mirroring the local reset in `logout`.
+        await api.logout().catch(() => undefined);
+        setBunches([]);
+        setHarvests([]);
+        setSettings(DEFAULT_SETTINGS);
+        setUser(null);
+        setSession('signedOut');
+        setError(null);
+        return true;
+      })(),
+    [fail],
+  );
 
   // --- selectors ---
   const getBunch = useCallback((id: string) => bunches.find((b) => b.id === id), [bunches]);
@@ -423,6 +452,7 @@ export function GrapeStoreProvider({ children }: { children: ReactNode }) {
       completeKakaoWebLogin,
       loginAsGuest,
       logout,
+      deleteAccount,
       getBunch,
       addBunch,
       setFilled,
@@ -450,6 +480,7 @@ export function GrapeStoreProvider({ children }: { children: ReactNode }) {
       completeKakaoWebLogin,
       loginAsGuest,
       logout,
+      deleteAccount,
       getBunch,
       addBunch,
       setFilled,

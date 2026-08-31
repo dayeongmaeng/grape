@@ -91,9 +91,24 @@ interface Harvest {
 
 `store.harvestBunch`(replant 엔드포인트)는 이 자동화 이후 호출부가 없다 — 서버 라우트는 남아 있으나 클라에서 안 쓴다.
 
+## 게스트 모드
+
+- **게스트 데이터는 로컬이 아니라 서버에 저장된다.** "로그인 없이 먼저 둘러보기"(`login.tsx`)는 `store.loginAsGuest` → `api.loginAsGuest`(`api.ts:128-134`)로 `POST /api/auth/guest`를 쳐서 **서버에 실제 `users` row(`provider=GUEST`)를 만들고** access/refresh 토큰을 받는다. 이후 게스트가 만드는 bunch/harvest/설정은 다른 사용자와 똑같이 서버에 저장된다.
+- **로컬 저장소는 토큰 전용이다.** `token-store.ts`가 access/refresh 토큰만 native=`expo-secure-store` / web=`localStorage`에 넣는다. bunch/harvest/settings를 담는 로컬 DB·AsyncStorage·SQLite는 **없고**, `store.loadLists`(`grape-store.tsx:125-132`)가 로그인 직후 항상 서버에서 새로 fetch한다. (`social-auth.ts`의 `sessionStorage`는 Kakao OAuth state(CSRF)용이지 앱 데이터가 아니다.)
+- **게스트 판별은 API 응답 기반이다.** 클라 로컬 플래그가 아니라 `GET /api/users/me`의 `provider === 'GUEST'`로 판정한다(`grape-store.tsx:139`). `session`(`'signedOut' | 'guest' | 'signedIn'`)은 이 값에서 파생되고, `store.guest`는 `session === 'guest'`다(`grape-store.tsx:444`).
+- **게스트 → 정식 회원 전환: 클라에 업로드/이관 코드는 없다(필요 없음).** 데이터가 이미 서버에 있으므로, 소셜 로그인 시 `loginContinue`가 `session === 'guest'`일 때 현재 게스트 access 토큰을 `api.loginWith*`의 guest-merge 헤더로 넘기기만 한다(`grape-store.tsx:196-206`, `226-227`). 실제 이관(row 승격 또는 소유권 이전)은 **서버 `AuthService.mergeGuest`가 수행**한다. 웹 Kakao는 리다이렉트 후 `completeKakaoWebLogin`이 토큰을 다시 읽어 같은 헤더로 넘긴다.
+- **게스트 상태의 설정 화면 UI**: `settings.tsx`의 마지막 `SettingsSection`(`" "` 제목)은 `store.guest`로 분기한다.
+  - 게스트면 "로그아웃"/"회원탈퇴" 대신 **"로그인하고 데이터 저장하기" 단일 CTA 한 줄**만 렌더하고, 탭하면 `router.push('/login')`으로 기존 로그인 화면을 재사용한다(`settings.tsx` `SettingsSection title=" "` 블록).
+  - 정식 로그인(`session === 'signedIn'`, 즉 `!guest`)이면 기존 로그아웃/회원탈퇴 두 줄을 그대로 렌더한다. 설정 화면은 `isAuthenticated` 가드 안이라 `session === 'signedOut'`은 도달하지 않으므로 분기 기준은 `guest` boolean 하나다.
+  - **`_layout.tsx`의 로그인 가드는 `guard={!isAuthenticated || guest}`**(`|| guest`가 CTA로 들어오는 게스트를 허용). 단 이 가드만으로는 게스트를 화면 밖으로 못 뺀다(게스트→게스트는 가드가 안 바뀜) — 그래서 `login.tsx`가 직접 이탈한다: `attempted` ref(이 화면에서 로그인 액션을 시작했는지) 또는 `!guest`(완전 로그인) 중 하나가 참이고 `hydrate`가 끝나면(`!isLoading`) `router.replace('/')` → 가드가 `/`를 tabs로 해석. 게스트가 CTA로 들어와 아무 것도 안 누른 상태(`attempted=false && guest`)에서는 튕겨나가지 않는다.
+  - 이미 게스트인데 로그인 화면에서 "로그인 없이 먼저 둘러보기"를 다시 누르면 `POST /api/auth/guest`를 **다시 치지 않고**(새 게스트 계정 생성 + 기존 데이터 고아화 방지) 곧바로 `router.replace('/')`로 복귀한다(`login.tsx` `continueAsGuest`).
+- **동작(store)에는 여전히 게스트 분기가 없다.** `logout`·`deleteAccount`(`grape-store.tsx`)는 provider/게스트 무관하게 각각 `api.logout` / `DELETE /api/users/me`를 호출한다. 게스트가 UI에서 이 두 버튼에 도달할 수 없게 됐을 뿐이다 — 이전엔 게스트 로그아웃 시 서버 `users` row가 고아로 남는 문제가 있었다.
+- **회원탈퇴 모달의 "소셜 계정(구글/카카오) 자체는 삭제되지 않아요" 안내 문구는 의도적으로 UI에서 제거됐다.** 서버에 카카오/구글 연동 해제(unlink/revoke)가 미구현인 사실(`grape-api/AGENTS.md` "회원탈퇴 정책" 참조)과는 **별개의 UI 결정**이다 — 문구를 되살리지 말 것. 현재 모달 본문은 "계정을 삭제하면 모든 포도송이와 수확 기록이 함께 삭제되고 되돌릴 수 없어요." 한 줄이다.
+- **`settings.tsx`의 "알림"·"포도알" 섹션(매일 리마인더/알림 시간/채울 때 소리) 제거는 의도된 설정 탭 정리 작업이다** — 회귀가 아니며 복원하지 말 것. 서버 `user_settings` 및 `store.settings`/`updateSettings`는 그대로 살아 있고 UI만 뺐다.
+
 ## 화면 구성
 인증 분기는 `_layout.tsx`의 `Stack.Protected`(`isAuthenticated`, 게스트 포함).
-- `login.tsx` — 로그인(Google/카카오/게스트). URL은 `/login` — `/`는 `(tabs)/index`(홈) 전용이라 로그인 화면을 `index.tsx`로 두면 `/` 라우트가 충돌해 인증 후 빈 화면이 뜬다. 미인증 시 `/`는 `(tabs)` 가드가 막혀 `/login`으로 자동 폴백된다
+- `login.tsx` — 로그인(Google/카카오/게스트). URL은 `/login` — `/`는 `(tabs)/index`(홈) 전용이라 로그인 화면을 `index.tsx`로 두면 `/` 라우트가 충돌해 인증 후 빈 화면이 뜬다. 미인증 시 `/`는 `(tabs)` 가드가 막혀 `/login`으로 자동 폴백된다. 가드는 `!isAuthenticated || guest`(게스트 CTA 진입 허용)이고, 로그인이 끝나면 화면이 직접 `router.replace('/')`한다 — 위 "게스트 모드" 참조
 - `auth/kakao/callback.tsx` — Kakao authorize 리다이렉트 도착지(웹 전용 렌더). 두 `Stack.Protected` 밖(게스트가 인증 상태로 돌아오므로 가드로 못 막음 → 화면이 직접 `router.replace('/')`로 이탈). 웹 로그인이면 code 교환, 네이티브 로그인이면 code를 `grape://`로 되돌림. code 교환은 마운트당 1회로 가드(같은 code 재교환 시 Kakao KOE320)
 - `(tabs)/index.tsx` — 홈: "포도송이 N개"(필터링 없는 `bunches.length`) + 목록 + 새 송이 만들기
 - `(tabs)/records.tsx` — 기록: **탭바에서 숨김 처리됨**(`(tabs)/_layout.tsx`의 `<Tabs.Screen name="records" options={{ href: null }} />`). 라우트 파일과 통계 로직(`stats.ts`, store, archive/complete 흐름)은 전혀 건드리지 않았고 `/records` 직접 URL/딥링크로는 정상 진입한다. 재노출하려면 `_layout.tsx`의 해당 항목을 `options={{ title: '기록' }}`으로 되돌리면 된다. 지표 계산은 모두 `bunches[].fillDates` + `harvests[].fillDates`를 병합한 값 기준(archive/recall로 송이가 리스트를 오가도 이력이 유지돼 통계가 0으로 빠지지 않음). **단 병합 배열을 두 가지로 나눠 씀** — 혼용 금지:
@@ -105,7 +120,7 @@ interface Harvest {
 
   즉 캘린더 on/off·연속은 고유 날짜 기준, 월별 알 수·주 평균은 알 개수(비-dedup) 기준.
 - `(tabs)/archive.tsx` — 보관함: `harvests` 카드 목록. 카드 클릭 시 **`harvest/[id]`로 이동**(원본 `bunch/[id]`가 아님 — 원본은 리셋되어 있어 빈 송이가 보이는 문제 방지)
-- `settings.tsx` — 알림/소리/로그아웃 등
+- `settings.tsx` — 프로필 + 정보(문의/약관/버전) + 계정 섹션. 계정 섹션은 `store.guest`로 분기: 게스트=「로그인하고 데이터 저장하기」 CTA(`/login`으로 push), 정식 로그인=로그아웃/회원탈퇴(+ 탈퇴 확인 모달). 알림/소리 설정 UI는 의도적으로 제거됨(위 "게스트 모드" 참조)
 - `bunch/new.tsx` — 새 송이 생성 모달
 - `bunch/[id].tsx` — 진행 중 송이 상세(채우기/되돌리기/삭제)
 - `bunch/complete.tsx` — 완성 축하 화면. 진입 시 자동 archive(위 "데이터 모델" 참고), 두 버튼은 이동/재시작만
@@ -120,6 +135,7 @@ interface Harvest {
 - **Google 네이티브 리다이렉트 스킴**: `grape://`가 아니라 reversed iOS/Android 클라이언트 ID 스킴이어야 함(Google이 커스텀 스킴을 400으로 거부). `social-auth.ts`가 이 스킴을 계산하고 `app.config.ts`가 네이티브에 등록 — 둘 중 하나만 바꾸지 말 것
 - **Kakao redirect_uri는 웹/네이티브가 서로 다름**: 웹은 `<origin>/auth/kakao/callback`, 네이티브는 `EXPO_PUBLIC_KAKAO_REDIRECT_URI`(호스팅 bounce 페이지). authorize 요청·서버 code 교환에 쓰는 값이 바이트 단위로 같아야 하므로 `signInWithKakao`가 반환한 `redirectUri`를 그대로 서버로 넘김
 - **`social-auth.ts` 최상단 `WebBrowser.maybeCompleteAuthSession()`**: OAuth 리다이렉트로 앱이 다시 열릴 때 대기 중인 세션을 종료시킴 — 지우지 말 것
+- **`login.tsx` 이탈은 가드가 아니라 화면이 직접 한다**: 게스트가 설정 CTA(`router.push('/login')`)로 이 화면을 여는데 게스트는 이미 `isAuthenticated`라, `_layout.tsx` 가드를 `!isAuthenticated || guest`로 열어 진입은 시켰다. 하지만 게스트→게스트 재선택은 `guest`를 안 바꿔 가드가 안 닫히므로, `login.tsx`가 `useEffect`로 직접 `router.replace('/')`한다. 조건: `!isLoading && isAuthenticated && (attempted.current || !guest)` — `attempted`는 이 화면에서 로그인 버튼을 눌렀는지, `!guest`는 완전 로그인. 마운트 시점(게스트가 막 진입, `attempted=false && guest=true`)엔 안 나감. **이 `useEffect`를 지우고 가드에만 의존하지 말 것** — 게스트→게스트 재선택 시 화면이 멈춘다. 또한 이미 게스트면 "둘러보기" 버튼은 `POST /api/auth/guest`를 다시 치지 않고(`continueAsGuest`) 곧장 `router.replace('/')` — 안 그러면 새 게스트 계정이 생겨 기존 데이터가 고아가 된다
 - **`Harvest.fillDates` 이관/복원**: `store.addHarvest`(archive)는 삭제되는 `Bunch.fillDates`를 harvest로 옮기고, `store.recallHarvest`는 그걸 새 `Bunch`로 되돌린다. 서버도 같은 이관/복원을 하지만, 두 액션은 서버 응답에 `fillDates`가 비어 오면 로컬 값으로 폴백한다(전환기 안전장치이자 낙관적 상태 정확성용) — 이 폴백은 "서버 응답 변환 코드 금지"의 예외. `records.tsx`가 `bunches`+`harvests`의 `fillDates`를 병합 집계하므로 이관을 빼먹으면 통계가 깨진다
 
 ## 하지 말 것 (이번 단계 스코프 아님)

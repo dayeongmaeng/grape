@@ -29,7 +29,7 @@ function Gate() {
 }
 
 function RootNavigator() {
-  const { isAuthenticated } = useGrapeStore();
+  const { isAuthenticated, guest } = useGrapeStore();
 
   return (
     <Stack
@@ -37,7 +37,10 @@ function RootNavigator() {
         headerShown: false,
         contentStyle: { backgroundColor: Colors.bgTop },
       }}>
-      <Stack.Protected guard={!isAuthenticated}>
+      {/* `|| guest`: a guest opens this via the settings CTA ("로그인하고 데이터 저장하기") while
+          still "authenticated". The guard alone can't get them *out* again (guest→guest doesn't
+          change it), so login.tsx navigates away itself once a login settles — see login.tsx. */}
+      <Stack.Protected guard={!isAuthenticated || guest}>
         <Stack.Screen name="login" />
       </Stack.Protected>
       {/* Kakao web redirect target — reachable regardless of auth state (a guest returns here

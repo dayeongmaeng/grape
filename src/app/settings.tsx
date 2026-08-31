@@ -1,11 +1,12 @@
 import { router } from 'expo-router';
-import { Linking, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useState } from 'react';
+import { Alert, Linking, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { Button } from '@/components/button';
 import { HeaderBar } from '@/components/header-bar';
 import { ScreenBackground } from '@/components/screen-background';
 import { SettingsRow, SettingsSection } from '@/components/settings-row';
-import { ToggleSwitch } from '@/components/toggle-switch';
 import { Colors, FontSize, Fonts, Radius, Spacing, gradientBackground } from '@/constants/theme';
 import { useGrapeStore } from '@/store/grape-store';
 
@@ -19,10 +20,23 @@ const PROVIDER_LABEL: Record<string, string> = {
 };
 
 export default function SettingsScreen() {
-  const { settings, updateSettings, user, guest, logout } = useGrapeStore();
+  const { user, guest, logout, deleteAccount } = useGrapeStore();
+  const [confirmWithdraw, setConfirmWithdraw] = useState(false);
+  const [withdrawing, setWithdrawing] = useState(false);
 
   const providerLabel = PROVIDER_LABEL[user?.provider ?? ''] ?? (guest ? '게스트' : '로그인');
   const displayName = user?.nickname?.trim() || (guest ? '게스트' : '포도알');
+
+  const onWithdraw = async () => {
+    setWithdrawing(true);
+    const ok = await deleteAccount();
+    setWithdrawing(false);
+    setConfirmWithdraw(false);
+    // On success the auth guard in _layout.tsx sends us back to /login as isAuthenticated flips.
+    if (!ok) {
+      Alert.alert('회원탈퇴 실패', '잠시 후 다시 시도해 주세요.');
+    }
+  };
 
   return (
     <ScreenBackground>
@@ -38,64 +52,73 @@ export default function SettingsScreen() {
             </View>
           </View>
 
-          <SettingsSection title="알림">
-            <SettingsRow
-              label="매일 리마인더"
-              sublabel="아직 안 채운 날 저녁에 알림"
-              right={
-                <ToggleSwitch
-                  value={settings.dailyReminder}
-                  onValueChange={(v) => updateSettings({ dailyReminder: v })}
-                />
-              }
-            />
-            <SettingsRow
-              label="알림 시간"
-              right={<Text style={styles.goldValue}>{settings.reminderTime}</Text>}
-              divider={false}
-            />
-          </SettingsSection>
-
-          <SettingsSection title="포도알">
-            <SettingsRow
-              label="채울 때 소리"
-              right={
-                <ToggleSwitch
-                  value={settings.fillSound}
-                  onValueChange={(v) => updateSettings({ fillSound: v })}
-                />
-              }
-              divider={false}
-            />
-          </SettingsSection>
-
-          <SettingsSection title="데이터 · 정보">
-            <SettingsRow label="데이터 백업" disabled right={<Badge label="준비 중" />} />
-            <SettingsRow label="기록 내보내기" disabled right={<Badge label="준비 중" />} />
+          <SettingsSection title="정보">
             <SettingsRow label="문의하기" />
             <SettingsRow
               label="개인정보처리방침"
               onPress={() => Linking.openURL(PRIVACY_URL)}
             />
             <SettingsRow label="이용약관" onPress={() => Linking.openURL(TERMS_URL)} />
-            <SettingsRow label="버전" right={<Text style={styles.mutedValue}>1.0.2</Text>} divider={false} />
+            <SettingsRow label="버전" right={<Text style={styles.mutedValue}>1.0.0</Text>} divider={false} />
           </SettingsSection>
 
           <SettingsSection title=" ">
-            <SettingsRow label="로그아웃" onPress={logout} />
-            <SettingsRow label="회원탈퇴" danger divider={false} />
+            {guest ? (
+              <SettingsRow
+                label="로그인하고 데이터 저장하기"
+                sublabel="게스트 기록을 계정에 안전하게 보관해요"
+                divider={false}
+                onPress={() => router.push('/login')}
+              />
+            ) : (
+              <>
+                <SettingsRow label="로그아웃" onPress={logout} />
+                <SettingsRow
+                  label="회원탈퇴"
+                  danger
+                  divider={false}
+                  onPress={() => setConfirmWithdraw(true)}
+                />
+              </>
+            )}
           </SettingsSection>
         </ScrollView>
       </SafeAreaView>
-    </ScreenBackground>
-  );
-}
 
-function Badge({ label }: { label: string }) {
-  return (
-    <View style={styles.badge}>
-      <Text style={styles.badgeLabel}>{label}</Text>
-    </View>
+      <Modal
+        visible={confirmWithdraw}
+        transparent
+        animationType="fade"
+        onRequestClose={() => (withdrawing ? undefined : setConfirmWithdraw(false))}>
+        <Pressable
+          style={styles.modalBackdrop}
+          onPress={() => (withdrawing ? undefined : setConfirmWithdraw(false))}>
+          <Pressable style={styles.modalCard} onPress={(e) => e.stopPropagation()}>
+            <Text style={styles.modalTitle}>회원탈퇴</Text>
+            <Text style={styles.modalMessage}>
+              계정을 삭제하면 모든 포도송이와 수확 기록이 함께 삭제되고 되돌릴 수 없어요.
+            </Text>
+            <View style={styles.modalActions}>
+              <Button
+                label="취소"
+                variant="outline"
+                style={styles.modalButton}
+                disabled={withdrawing}
+                onPress={() => setConfirmWithdraw(false)}
+              />
+              <Button
+                label={withdrawing ? '처리 중…' : '탈퇴'}
+                variant="solid"
+                style={styles.modalButton}
+                textColor={Colors.textDanger}
+                disabled={withdrawing}
+                onPress={onWithdraw}
+              />
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+    </ScreenBackground>
   );
 }
 
@@ -147,16 +170,40 @@ const styles = StyleSheet.create({
     fontSize: FontSize.sm,
     color: Colors.textTertiary,
   },
-  badge: {
-    borderWidth: 1,
-    borderColor: Colors.border,
-    borderRadius: Radius.pill,
-    paddingVertical: 3,
-    paddingHorizontal: Spacing.sm,
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(9,6,15,0.6)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: Spacing.xxl,
   },
-  badgeLabel: {
+  modalCard: {
+    width: '100%',
+    maxWidth: 320,
+    borderRadius: Radius.huge,
+    backgroundColor: Colors.bgBottom,
+    borderWidth: 1,
+    borderColor: Colors.borderStrong,
+    padding: Spacing.xl,
+    gap: Spacing.sm,
+  },
+  modalTitle: {
+    fontFamily: Fonts.serif,
+    fontSize: FontSize.xl,
+    color: Colors.textPrimary,
+  },
+  modalMessage: {
     fontFamily: Fonts.sansLight,
-    fontSize: FontSize.xxs,
-    color: Colors.textDisabled,
+    fontSize: FontSize.sm,
+    color: Colors.textSecondary,
+    lineHeight: 20,
+    marginBottom: Spacing.sm,
+  },
+  modalActions: {
+    flexDirection: 'row',
+    gap: Spacing.sm,
+  },
+  modalButton: {
+    flex: 1,
   },
 });
